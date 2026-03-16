@@ -19,7 +19,7 @@ module.exports = async function handler(req, res) {
   };
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
     const body = JSON.stringify({
       contents: [{ parts: [{ text: prompts[market] }] }],
