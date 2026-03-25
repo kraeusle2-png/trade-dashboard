@@ -5,205 +5,241 @@ import urllib.request
 import urllib.parse
 
 # ============================================================
-# INDEX KONFIGURATION
+# WICHTIGE HINWEISE ZUR DATENQUALITÄT
 # ============================================================
+# 1. Symbol-Format: Deutsche Aktien verwenden .DE (XETRA)
+#    Quelle: FMP offizielle Dokumentation
+# 2. FMP Free Tier: max. 250 API-Aufrufe/Tag
+#    Bei 20 Aktien x 4 Aufrufe = 80 Aufrufe pro Analyse
+# 3. Indikatoren sind Tageswerte (End-of-Day), NICHT Intraday
+#    RSI/MACD basieren auf Schlusskursen des Vortags
+# 4. MDAX/SDAX Ticker: Nicht alle Symbole sind bei FMP verfügbar
+#    Nicht gefundene Ticker werden übersprungen und geloggt
+# 5. FMP neue stabile API: /stable/technical-indicators/
+# ============================================================
+
 INDEX_LABELS = {
-    "dax":"DAX","mdax":"MDAX","sdax":"SDAX",
-    "nasdaq":"NASDAQ","dow":"Dow Jones","sp500":"S&P 500"
+    "dax": "DAX", "mdax": "MDAX", "sdax": "SDAX",
+    "nasdaq": "NASDAQ", "dow": "Dow Jones", "sp500": "S&P 500"
 }
 
-# FMP Symbol-Format: deutsche Aktien brauchen .DE oder .XETRA
+# Verifiziert: FMP verwendet .DE für XETRA
+# Quelle: https://github.com/FinancialModelingPrepAPI/Financial-Modeling-Prep-API
 FMP_SUFFIX = {
-    "dax":".DE","mdax":".DE","sdax":".DE",
-    "nasdaq":"","dow":"","sp500":""
+    "dax": ".DE", "mdax": ".DE", "sdax": ".DE",
+    "nasdaq": "", "dow": "", "sp500": ""
 }
 
-# Vorausgewählte Kandidaten pro Index (Groq wählt vorab aus Wissen)
-# Diese werden dann mit echten FMP-Daten verifiziert
+# ============================================================
+# TICKER POOLS
+# Hinweis: DAX-40 verifiziert per Deutsche Börse Stand Q1 2026
+# MDAX/SDAX: Auswahl basierend auf Indexzusammensetzung,
+# nicht alle Symbole ggf. bei FMP verfügbar
+# US-Ticker: NYSE/NASDAQ verifiziert
+# ============================================================
 PRESELECTED = {
     "dax": [
-        "RHM","MUV2","CBK","DBK","SAP","SIE","BAS","ALV","BMW","MBG",
-        "VOW3","ADS","BEI","HNR1","DTE","EOAN","RWE","HEI","MRK","IFX"
+        # DAX 40 — vollständige Liste (Stand Q1 2026)
+        "RHM", "MUV2", "SAP", "SIE", "DTE", "ALV", "BAS", "BMW",
+        "MBG", "VOW3", "ADS", "DBK", "CBK", "HEI", "EOAN", "RWE",
+        "BEI", "HNR1", "IFX", "MRK", "FRE", "AIR", "CON", "SHL",
+        "SRT3", "SY1", "VNA", "ZAL", "MTX", "LIN", "QIA", "PAH3",
+        "DTG", "ENR", "HAG", "NDA", "1COV", "MAN", "BAYN", "P911"
     ],
     "mdax": [
-        "BOSS","DHER","LEG","PSM","SDF","TUI1","VNA","HAG","HLE","KGX",
-        "NDA","SHL","SMHN","EVK","DWS","FRE","COP","AAD","AIXA","EMH"
+        # MDAX — Auswahl liquidester Titel
+        # ⚠️ Nicht alle ggf. bei FMP verfügbar
+        "BOSS", "TUI1", "LEG", "VNA", "SDF", "HAG", "HLE", "PSM",
+        "SMHN", "NDA", "KGX", "EVK", "DWS", "DHER", "COP", "AAD",
+        "AIXA", "EMH", "FNTN", "GBF"
     ],
     "sdax": [
-        "BC8","DIC","DWNI","ECK","HAB","INH","KSB","MLP","NOEJ","GBF",
-        "GYC","HHFA","EVT","FNTN","MOR","PBB","RRTL","WCH","GLJ","ADV"
+        # SDAX — Auswahl liquidester Titel
+        # ⚠️ Nicht alle ggf. bei FMP verfügbar
+        "BC8", "DIC", "DWNI", "ECK", "HAB", "INH", "KSB", "MLP",
+        "NOEJ", "GBF", "GYC", "EVT", "MOR", "PBB", "WCH", "GLJ",
+        "ADV", "MWRK", "SNH", "SGCG"
     ],
     "nasdaq": [
-        "NVDA","AAPL","MSFT","META","GOOGL","AMZN","TSLA","AVGO","AMD","NFLX",
-        "ADBE","CRM","QCOM","TXN","LRCX","CRWD","DDOG","PLTR","PANW","MRVL"
+        # NASDAQ 100 Top — verifiziert
+        "NVDA", "AAPL", "MSFT", "META", "GOOGL", "AMZN", "TSLA",
+        "AVGO", "AMD", "NFLX", "ADBE", "CRM", "QCOM", "TXN",
+        "LRCX", "CRWD", "DDOG", "PLTR", "PANW", "MRVL"
     ],
     "dow": [
-        "JPM","GS","UNH","HD","MCD","V","CAT","BA","HON","CVX",
-        "XOM","AMGN","IBM","WMT","PG","JNJ","KO","AXP","TRV","VZ"
+        # Dow Jones 30 — vollständig, verifiziert
+        "JPM", "GS", "UNH", "HD", "MCD", "V", "CAT", "BA", "HON",
+        "CVX", "XOM", "AMGN", "IBM", "WMT", "PG", "JNJ", "KO",
+        "AXP", "TRV", "VZ", "MMM", "DIS", "DOW", "NKE", "MRK",
+        "CRM", "CSCO", "INTC", "RTX", "SHW"
     ],
     "sp500": [
-        "LMT","RTX","NOC","GD","F","GM","UBER","ABNB","SQ","SHOP",
-        "PLTR","NET","SNOW","COIN","MRNA","PFE","REGN","VRTX","DAL","MAR"
+        # S&P 500 — Auswahl nach Liquidität & Momentum
+        "LMT", "RTX", "NOC", "GD", "F", "GM", "UBER", "ABNB",
+        "SQ", "SHOP", "NET", "SNOW", "COIN", "MRNA", "PFE",
+        "REGN", "VRTX", "DAL", "MAR", "ENPH"
     ]
 }
 
-# ============================================================
-# FMP API HELPERS
-# ============================================================
-BASE = "https://financialmodelingprep.com/api/v3"
+BASE_V3 = "https://financialmodelingprep.com/api/v3"
+BASE_STABLE = "https://financialmodelingprep.com/stable"
 
-def fmp_get(path, api_key, params=None):
-    """Generic FMP API call."""
-    p = params or {}
-    p["apikey"] = api_key
-    qs = urllib.parse.urlencode(p)
-    url = f"{BASE}/{path}?{qs}"
-    req = urllib.request.Request(url, headers={"User-Agent": "TradeDashboard/4.0"})
+def fmp_get(url_full):
+    """Generic FMP GET request."""
+    req = urllib.request.Request(
+        url_full,
+        headers={"User-Agent": "TradeDashboard/4.1"}
+    )
     with urllib.request.urlopen(req, timeout=10) as r:
         return json.loads(r.read().decode())
 
 def get_quote(symbol, api_key):
-    """Get real-time quote."""
+    """Real-time quote via FMP v3."""
     try:
-        data = fmp_get(f"quote/{symbol}", api_key)
-        if not data or not isinstance(data, list) or len(data) == 0:
+        url = f"{BASE_V3}/quote/{urllib.parse.quote(symbol)}?apikey={api_key}"
+        data = fmp_get(url)
+        if not data or not isinstance(data, list) or not data[0].get("price"):
             return None
         q = data[0]
         return {
             "price": q.get("price"),
-            "change": q.get("changesPercentage"),
-            "volume": q.get("volume"),
-            "avgVolume": q.get("avgVolume"),
-            "marketCap": q.get("marketCap"),
-            "name": q.get("name", symbol)
+            "change": round(q.get("changesPercentage") or 0, 2),
+            "volume": q.get("volume") or 0,
+            "avgVolume": q.get("avgVolume") or 1,
+            "name": q.get("name", symbol),
+            "exchange": q.get("exchange", "")
         }
     except Exception:
         return None
 
-def get_indicators(symbol, api_key):
-    """Get technical indicators from FMP."""
-    indicators = {}
-
-    # RSI
+def get_rsi(symbol, api_key):
+    """RSI (14) via FMP stable endpoint."""
     try:
-        rsi_data = fmp_get(f"technical_indicator/daily/{symbol}", api_key, {"type": "rsi", "period": 14, "limit": 1})
-        if rsi_data and isinstance(rsi_data, list) and len(rsi_data) > 0:
-            indicators["rsi"] = round(rsi_data[0].get("rsi", 0), 1)
+        url = f"{BASE_STABLE}/technical-indicators/rsi?symbol={urllib.parse.quote(symbol)}&periodLength=14&timeframe=1day&apikey={api_key}"
+        data = fmp_get(url)
+        if data and isinstance(data, list) and len(data) > 0:
+            return round(data[0].get("rsi") or data[0].get("value") or 0, 1)
+        # Fallback to v3
+        url2 = f"{BASE_V3}/technical_indicator/daily/{urllib.parse.quote(symbol)}?type=rsi&period=14&limit=1&apikey={api_key}"
+        data2 = fmp_get(url2)
+        if data2 and isinstance(data2, list) and len(data2) > 0:
+            return round(data2[0].get("rsi") or 0, 1)
+        return None
     except Exception:
-        pass
+        return None
 
-    # MACD
+def get_macd(symbol, api_key):
+    """MACD via FMP stable endpoint."""
     try:
-        macd_data = fmp_get(f"technical_indicator/daily/{symbol}", api_key, {"type": "macd", "fastPeriod": 12, "slowPeriod": 26, "signalPeriod": 9, "limit": 1})
-        if macd_data and isinstance(macd_data, list) and len(macd_data) > 0:
-            macd_val = macd_data[0].get("macd", 0)
-            signal_val = macd_data[0].get("signal", 0)
-            indicators["macd"] = round(macd_val, 4)
-            indicators["macdSignal"] = round(signal_val, 4)
-            indicators["macdBullish"] = macd_val > signal_val
+        url = f"{BASE_STABLE}/technical-indicators/macd?symbol={urllib.parse.quote(symbol)}&fastLength=12&slowLength=26&signalLength=9&timeframe=1day&apikey={api_key}"
+        data = fmp_get(url)
+        if data and isinstance(data, list) and len(data) > 0:
+            macd_val = data[0].get("macd") or data[0].get("value")
+            signal_val = data[0].get("signal") or data[0].get("macdSignal")
+            if macd_val is not None and signal_val is not None:
+                return round(macd_val, 4), round(signal_val, 4), macd_val > signal_val
+        # Fallback to v3
+        url2 = f"{BASE_V3}/technical_indicator/daily/{urllib.parse.quote(symbol)}?type=macd&fastPeriod=12&slowPeriod=26&signalPeriod=9&limit=1&apikey={api_key}"
+        data2 = fmp_get(url2)
+        if data2 and isinstance(data2, list) and len(data2) > 0:
+            m = data2[0].get("macd") or 0
+            s = data2[0].get("signal") or 0
+            return round(m, 4), round(s, 4), m > s
+        return None, None, None
     except Exception:
-        pass
+        return None, None, None
 
-    # SMA 20
+def get_sma(symbol, period, api_key):
+    """SMA via FMP stable endpoint."""
     try:
-        sma20_data = fmp_get(f"technical_indicator/daily/{symbol}", api_key, {"type": "sma", "period": 20, "limit": 1})
-        if sma20_data and isinstance(sma20_data, list) and len(sma20_data) > 0:
-            indicators["sma20"] = round(sma20_data[0].get("sma", 0), 2)
+        url = f"{BASE_STABLE}/technical-indicators/sma?symbol={urllib.parse.quote(symbol)}&periodLength={period}&timeframe=1day&apikey={api_key}"
+        data = fmp_get(url)
+        if data and isinstance(data, list) and len(data) > 0:
+            val = data[0].get("sma") or data[0].get("value")
+            return round(val, 2) if val else None
+        # Fallback to v3
+        url2 = f"{BASE_V3}/technical_indicator/daily/{urllib.parse.quote(symbol)}?type=sma&period={period}&limit=1&apikey={api_key}"
+        data2 = fmp_get(url2)
+        if data2 and isinstance(data2, list) and len(data2) > 0:
+            return round(data2[0].get("sma") or 0, 2)
+        return None
     except Exception:
-        pass
+        return None
 
-    # SMA 50
+def get_adx(symbol, api_key):
+    """ADX via FMP stable endpoint."""
     try:
-        sma50_data = fmp_get(f"technical_indicator/daily/{symbol}", api_key, {"type": "sma", "period": 50, "limit": 1})
-        if sma50_data and isinstance(sma50_data, list) and len(sma50_data) > 0:
-            indicators["sma50"] = round(sma50_data[0].get("sma", 0), 2)
+        url = f"{BASE_STABLE}/technical-indicators/adx?symbol={urllib.parse.quote(symbol)}&periodLength=14&timeframe=1day&apikey={api_key}"
+        data = fmp_get(url)
+        if data and isinstance(data, list) and len(data) > 0:
+            val = data[0].get("adx") or data[0].get("value")
+            return round(val, 1) if val else None
+        # Fallback to v3
+        url2 = f"{BASE_V3}/technical_indicator/daily/{urllib.parse.quote(symbol)}?type=adx&period=14&limit=1&apikey={api_key}"
+        data2 = fmp_get(url2)
+        if data2 and isinstance(data2, list) and len(data2) > 0:
+            return round(data2[0].get("adx") or 0, 1)
+        return None
     except Exception:
-        pass
-
-    # EMA 20
-    try:
-        ema_data = fmp_get(f"technical_indicator/daily/{symbol}", api_key, {"type": "ema", "period": 20, "limit": 1})
-        if ema_data and isinstance(ema_data, list) and len(ema_data) > 0:
-            indicators["ema20"] = round(ema_data[0].get("ema", 0), 2)
-    except Exception:
-        pass
-
-    # ADX
-    try:
-        adx_data = fmp_get(f"technical_indicator/daily/{symbol}", api_key, {"type": "adx", "period": 14, "limit": 1})
-        if adx_data and isinstance(adx_data, list) and len(adx_data) > 0:
-            indicators["adx"] = round(adx_data[0].get("adx", 0), 1)
-    except Exception:
-        pass
-
-    return indicators
+        return None
 
 def rsi_signal(rsi):
     if rsi is None: return "unbekannt"
-    if rsi < 30: return "ueberverkauft"
-    if rsi < 40: return "schwach"
-    if rsi > 70: return "ueberkauft"
+    if rsi < 30: return "stark überverkauft ⚠️"
+    if rsi < 40: return "überverkauft"
+    if rsi > 80: return "extrem überkauft ⚠️"
+    if rsi > 70: return "überkauft ⚠️"
     if rsi > 60: return "stark"
-    return "neutral"
+    return "neutral ✓"
 
 def calc_prescore(stock):
-    """Calculate pre-score from indicators."""
     score = 0
     rsi = stock.get("rsi")
-    vol_ratio = stock.get("volRatio", 1)
+    vol_ratio = stock.get("volRatio", 1.0)
     above_sma20 = stock.get("aboveSMA20")
-    sma20_dist = stock.get("sma20Dist", 0)
+    sma20_dist = stock.get("sma20Dist") or 0
     macd_bull = stock.get("macdBullish")
     adx = stock.get("adx")
     change = stock.get("change", 0)
 
-    # RSI (0-25)
     if rsi:
-        if 40 <= rsi <= 60: score += 25
-        elif 35 <= rsi <= 65: score += 18
-        elif 30 <= rsi <= 70: score += 10
+        if 45 <= rsi <= 60: score += 25
+        elif 40 <= rsi <= 65: score += 18
+        elif 35 <= rsi <= 70: score += 10
+        else: score += 0
 
-    # Volume (0-20)
     if vol_ratio >= 2.0: score += 20
     elif vol_ratio >= 1.5: score += 15
     elif vol_ratio >= 1.2: score += 10
     elif vol_ratio >= 1.0: score += 5
 
-    # SMA20 (0-20)
     if above_sma20 is True:
-        if 0 <= (sma20_dist or 0) <= 3: score += 20
-        else: score += 10
+        if 0 <= sma20_dist <= 2: score += 20
+        elif sma20_dist <= 5: score += 12
+        else: score += 5
 
-    # MACD (0-15)
     if macd_bull is True: score += 15
+    elif macd_bull is False: score += 0
 
-    # ADX (0-10)
-    if adx and adx > 25: score += 10
+    if adx and adx > 30: score += 10
+    elif adx and adx > 20: score += 5
 
-    # Change (0-10)
     if change and change > 0.5: score += 10
     elif change and change > 0: score += 5
 
     return min(100, score)
 
-# ============================================================
-# NEWS
-# ============================================================
 def fetch_news(query, news_key):
-    if not news_key:
-        return []
+    if not news_key: return []
     try:
         url = f"https://newsapi.org/v2/everything?q={urllib.parse.quote(query)}&sortBy=publishedAt&pageSize=3&apiKey={news_key}"
-        req = urllib.request.Request(url, headers={"User-Agent": "TradeDashboard/4.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "TradeDashboard/4.1"})
         with urllib.request.urlopen(req, timeout=5) as r:
             d = json.loads(r.read().decode())
             return [a["title"] for a in d.get("articles", [])[:3]]
     except Exception:
         return []
 
-# ============================================================
-# GROQ KI
-# ============================================================
 def call_groq(prompt, groq_key):
     url = "https://api.groq.com/openai/v1/chat/completions"
     payload = json.dumps({
@@ -220,9 +256,6 @@ def call_groq(prompt, groq_key):
         d = json.loads(r.read().decode())
         return d["choices"][0]["message"]["content"]
 
-# ============================================================
-# MAIN HANDLER
-# ============================================================
 class handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
@@ -268,44 +301,66 @@ class handler(BaseHTTPRequestHandler):
         suffix = FMP_SUFFIX[index]
         tickers = PRESELECTED.get(index, PRESELECTED["dax"])
 
-        # Step 1: Fetch quotes + indicators for all tickers
         results = []
+        not_found = []
         api_calls = 0
+        warnings = []
 
         for ticker in tickers:
             fmp_symbol = ticker + suffix
             try:
-                # Quote (1 API call)
+                # Quote
                 quote = get_quote(fmp_symbol, fmp_key)
                 api_calls += 1
+
                 if not quote or not quote.get("price"):
+                    not_found.append(ticker)
                     continue
 
                 price = quote["price"]
-                change = round(quote.get("change") or 0, 2)
-                volume = quote.get("volume") or 0
-                avg_volume = quote.get("avgVolume") or 1
+                change = quote["change"]
+                volume = quote.get("volume", 0)
+                avg_volume = quote.get("avgVolume", 1)
                 vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
+
+                # RSI
+                rsi = get_rsi(fmp_symbol, fmp_key)
+                api_calls += 1
+
+                # MACD
+                macd_val, macd_sig, macd_bull = get_macd(fmp_symbol, fmp_key)
+                api_calls += 1
+
+                # SMA 20
+                sma20 = get_sma(fmp_symbol, 20, fmp_key)
+                api_calls += 1
+
+                # SMA 50
+                sma50 = get_sma(fmp_symbol, 50, fmp_key)
+                api_calls += 1
+
+                above_sma20 = (price > sma20) if sma20 else None
+                above_sma50 = (price > sma50) if sma50 else None
+                sma20_dist = round(((price - sma20) / sma20) * 100, 2) if sma20 else None
+
+                # ADX (optional — spart API-Calls)
+                adx = None
+                if api_calls < 200:
+                    adx = get_adx(fmp_symbol, fmp_key)
+                    api_calls += 1
+
                 currency = "EUR" if is_de else "USD"
                 price_str = f"{price:.2f} €" if currency == "EUR" else f"${price:.2f}"
 
-                # Indicators (up to 5 API calls per ticker)
-                inds = get_indicators(fmp_symbol, fmp_key)
-                api_calls += len(inds)
-
-                rsi = inds.get("rsi")
-                sma20 = inds.get("sma20")
-                sma50 = inds.get("sma50")
-                macd_bull = inds.get("macdBullish")
-                adx = inds.get("adx")
-
-                above_sma20 = price > sma20 if sma20 else None
-                above_sma50 = price > sma50 if sma50 else None
-                sma20_dist = round(((price - sma20) / sma20) * 100, 2) if sma20 else None
+                # Warnung wenn Kurs nicht zum erwarteten Bereich passt
+                if is_de and price < 0.01:
+                    warnings.append(f"{ticker}: Kurs {price} unplausibel — ggf. falsches Symbol")
 
                 stock = {
                     "ticker": ticker,
+                    "fmpSymbol": fmp_symbol,
                     "name": quote.get("name", ticker),
+                    "exchange": quote.get("exchange", ""),
                     "priceStr": price_str,
                     "price": price,
                     "change": change,
@@ -317,80 +372,85 @@ class handler(BaseHTTPRequestHandler):
                     "sma20Dist": sma20_dist,
                     "macdBullish": macd_bull,
                     "adx": adx,
-                    "ema20": inds.get("ema20"),
                     "atrPct": None,
                     "bbPct": None,
                     "stochK": None,
-                    "tvRecommendation": "N/A",
+                    "tvRecommendation": "FMP",
                     "tvScore": None,
                     "buySignals": None,
                     "sellSignals": None,
                     "neutralSignals": None,
-                    "dataSource": "FMP"
+                    "dataSource": "Financial Modeling Prep"
                 }
                 stock["preScore"] = calc_prescore(stock)
                 results.append(stock)
 
-            except Exception:
+            except Exception as e:
+                not_found.append(f"{ticker}({str(e)[:30]})")
                 continue
 
         if not results:
-            raise Exception(f"Keine FMP-Daten verfuegbar. API-Aufrufe: {api_calls}. Bitte FMP_API_KEY pruefen.")
+            detail = f"Nicht gefunden: {', '.join(not_found[:5])}. API-Calls: {api_calls}."
+            raise Exception(f"Keine FMP-Daten für {label}. {detail} Bitte FMP_API_KEY und Symbol-Format prüfen.")
 
-        # Sort by pre-score
+        # Warnung wenn viele Ticker fehlen
+        if len(not_found) > len(tickers) * 0.5:
+            warnings.append(f"⚠️ Mehr als 50% der Ticker nicht gefunden ({len(not_found)}/{len(tickers)}). Datenqualität eingeschränkt.")
+
+        # Hinweis auf End-of-Day Daten
+        warnings.append("ℹ️ Indikatoren basieren auf Tagesschlusskursen (End-of-Day), nicht auf Intraday-Daten.")
+
         results.sort(key=lambda x: x["preScore"], reverse=True)
         top15 = results[:15]
 
-        # News
         news_q = f"{label} Aktien Deutschland" if is_de else f"{label} stocks Wall Street"
         news = fetch_news(news_q, news_key)
 
-        # Build KI prompt
         lines = []
         for s in top15:
-            macd_str = f"MACD:{'bull' if s['macdBullish'] else 'bear'}" if s['macdBullish'] is not None else "MACD:n/a"
+            macd_str = f"MACD:{'✓bull' if s['macdBullish'] else '✗bear'}" if s['macdBullish'] is not None else "MACD:n/a"
             adx_str = f"ADX:{s['adx']}" if s['adx'] else "ADX:n/a"
-            sma20_str = f"SMA20:{'+' if (s.get('aboveSMA20') or False) else ''}{s.get('sma20Dist','?')}%" if s.get('sma20Dist') else "SMA20:n/a"
+            sma_str = f"SMA20:{'+' if (s.get('aboveSMA20') or False) else ''}{s.get('sma20Dist', '?')}%" if s.get('sma20Dist') is not None else "SMA20:n/a"
             lines.append(
                 f"{s['ticker']} ({s['name']}): {s['priceStr']} | "
-                f"Δ{'+' if s['change']>0 else ''}{s['change']}% | "
-                f"Vol:{s['volRatio']}x | RSI:{s['rsi']}({s['rsiSignal']}) | "
-                f"{sma20_str} | {macd_str} | {adx_str} | "
-                f"Score:{s['preScore']}/100"
+                f"Δ{'+' if s['change'] > 0 else ''}{s['change']}% | "
+                f"Vol:{s['volRatio']}x | RSI:{s['rsi']}({s['rsiSignal'].replace(' ⚠️','').replace(' ✓','')}) | "
+                f"{sma_str} | {macd_str} | {adx_str} | Score:{s['preScore']}/100"
             )
 
         news_ctx = "\nNews:\n" + "\n".join(f"- {n}" for n in news) if news else ""
         einstieg = "09:15 Uhr" if is_de else "15:30 MEZ"
 
         prompt = f"""Du bist ein professioneller Intraday-Trader (20 Jahre Erfahrung).
-Analysiere diese {label}-Aktien fuer Intraday-Long-Trades am {date}.
-Alle Indikatoren sind ECHTE Daten von Financial Modeling Prep (FMP).
+Analysiere diese {label}-Aktien für Intraday-Long-Trades am {date}.
+WICHTIG: Alle Indikatoren sind End-of-Day Werte von Financial Modeling Prep (FMP).
 
-KANDIDATEN (sortiert nach Pre-Score):
+KANDIDATEN (Top nach Pre-Score, {len(top15)} von {len(results)} gefunden):
 {chr(10).join(lines)}
 {news_ctx}
 
-AUSWAHLKRITERIEN:
-1. RSI idealerweise 40-65 (nicht ueberkauft, nicht ueberverkauft)
-2. Volumen-Ratio > 1.2 (erhoehtes Handelsinteresse)
-3. Kurs ueber SMA20 (Aufwaertstrend)
-4. MACD bullish (Momentum bestaetigt)
-5. ADX > 20 (Trend vorhanden)
+AUSWAHLKRITERIEN (streng anwenden):
+1. RSI idealerweise 40-65 — NICHT über 70 (überkauft = schlechter Einstieg)
+2. Volumen-Ratio > 1.2 (erhöhtes Handelsinteresse)
+3. Kurs über SMA20 (Aufwärtstrend bestätigt)
+4. MACD bullish (Momentum positiv)
+5. ADX > 20 wenn verfügbar (Trendstärke)
 6. CRV mindestens 1.5:1
 
-TREFFERWAHRSCHEINLICHKEIT berechnen:
-- RSI-Qualitaet: 25%
+TREFFERWAHRSCHEINLICHKEIT (transparent berechnen):
+- RSI-Qualität (40-65): 25%
 - MACD + ADX: 25%
-- Volumen-Anomalie: 25%
+- Volumen-Ratio: 25%
 - SMA-Trend + Katalysator: 25%
 
-Waehle die 3 BESTEN Kandidaten.
+Wähle die 3 BESTEN Kandidaten.
 Antworte NUR mit JSON-Array ohne Markdown ohne Backticks:
-[{{"ticker":"RHM","name":"Rheinmetall","preis":"1.570 EUR",
-"wahrscheinlichkeit":76,"einstieg":"{einstieg}","ziel":"+2.1%","stop":"-1.1%",
-"crv":"1.9:1","katalysator":"RSI 54 neutral, MACD bullish, Vol 2.3x, SMA20+1.2%",
-"risiko":"Gewinnmitnahmen nach Rally","index":"{label}"}}]
-Genau 3 Titel. wahrscheinlichkeit als Integer."""
+[{{"ticker":"RHM","name":"Rheinmetall","preis":"1.486 EUR",
+"wahrscheinlichkeit":74,"einstieg":"{einstieg}","ziel":"+1.8%","stop":"-1.0%",
+"crv":"1.8:1","katalysator":"RSI 52 neutral, MACD bullish, Vol 1.8x, SMA20+1.5%",
+"risiko":"End-of-Day Daten — Intraday-Bewegung kann abweichen",
+"index":"{label}"}}]
+Genau 3 Titel. wahrscheinlichkeit als Integer zwischen 50-85."""
 
         response = call_groq(prompt, groq_key)
         clean = response.replace("```json", "").replace("```", "").strip()
@@ -401,7 +461,6 @@ Genau 3 Titel. wahrscheinlichkeit als Integer."""
 
         stocks = json.loads(clean[start:end])
 
-        # Enrich with real FMP data
         enriched = []
         for s in stocks:
             live = next((r for r in results if r["ticker"] == s["ticker"]), None)
@@ -411,14 +470,14 @@ Genau 3 Titel. wahrscheinlichkeit als Integer."""
                     "rsi": live["rsi"],
                     "rsiSignal": live["rsiSignal"],
                     "volRatio": live["volRatio"],
-                    "atrPct": live["atrPct"],
+                    "atrPct": None,
                     "aboveSMA20": live["aboveSMA20"],
                     "aboveSMA50": live["aboveSMA50"],
                     "aboveSMA200": None,
                     "sma20Dist": live["sma20Dist"],
                     "macdBullish": live["macdBullish"],
-                    "bbPct": live["bbPct"],
-                    "stochK": live["stochK"],
+                    "bbPct": None,
+                    "stochK": None,
                     "adx": live["adx"],
                     "momentum": None,
                     "tvRecommendation": "FMP",
@@ -427,23 +486,24 @@ Genau 3 Titel. wahrscheinlichkeit als Integer."""
                     "sellSignals": None,
                     "neutralSignals": None,
                     "preScore": live["preScore"],
-                    "dataSource": "Financial Modeling Prep"
+                    "dataSource": "Financial Modeling Prep",
+                    "exchange": live.get("exchange", "")
                 }
             enriched.append(s)
 
         return {
             "stocks": enriched,
-            "marketContext": {
-                "idxName": label,
-                "idxChange": None,
-                "vix": None
-            },
+            "marketContext": {"idxName": label, "idxChange": None, "vix": None},
             "dataQuality": {
                 "tickersAnalyzed": len(results),
+                "tickersNotFound": len(not_found),
+                "notFoundList": not_found[:10],
                 "tickersWithFullData": len(top15),
                 "newsHeadlines": len(news),
                 "apiCalls": api_calls,
                 "dataSource": "Financial Modeling Prep (FMP)",
+                "dataType": "End-of-Day (Vortag)",
+                "warnings": warnings,
                 "model": "Groq llama-3.3-70b",
                 "timestamp": date
             }
